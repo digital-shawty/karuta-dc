@@ -39,7 +39,8 @@ XXXXXXXXXX
 
 CELL = 10      # units per pixel
 GAP = 2        # cells between the letters
-STROKE = 6     # outline weight, in units
+STROKE = 10    # outline weight, in units. The mark is drawn small in the
+               # tighter layouts, so the outline has to carry it there.
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TARGET = ROOT / 'app' / 'assets' / 'cardgen' / 'marks' / 'vs-default.svg'

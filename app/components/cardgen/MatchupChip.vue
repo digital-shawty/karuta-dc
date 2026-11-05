@@ -5,7 +5,9 @@
 //
 // The thumbnails are also handles. Drag one onto another card, in this chip
 // or any other, to swap the two. While a swap is lined up both ends show
-// what they are about to hold, half faded.
+// what they are about to hold, half faded. Clicking one without dragging
+// opens the matchup for editing, the same as the pencil below it: the cards
+// are the obvious thing to reach for, and they are a far bigger target.
 
 import { CARD_MIME } from '~/composables/useCardgen'
 
@@ -26,10 +28,27 @@ function isPending(index) {
   return Boolean(gen.pendingAt(props.matchup.id, index))
 }
 
+/**
+ * Whether the gesture under way is a drag.
+ *
+ * A finished drag does not raise a click, so this is belt and braces rather
+ * than the whole of it, and it is plain state rather than a ref because
+ * nothing renders from it.
+ */
+let dragging = false
+
 function onDragStart(event, index) {
+  dragging = true
   event.dataTransfer.setData(CARD_MIME, `${props.matchup.id}:${index}`)
   event.dataTransfer.effectAllowed = 'move'
   gen.beginDrag(props.matchup.id, index)
+}
+
+function onOpen() {
+  // Already open in the builder: asking for it again would rebuild the draft
+  // from the filed cards and throw away whatever has been changed there.
+  if (dragging || props.active) return
+  emit('edit')
 }
 
 function onDragOver(event, index) {
@@ -52,8 +71,11 @@ function onDragOver(event, index) {
         :src="shown(index)?.src"
         alt=""
         draggable="true"
+        :title="active ? '' : 'Click to edit, or drag to swap'"
         class="h-[5.25rem] w-[3.55rem] cursor-grab rounded-sm object-cover transition-opacity active:cursor-grabbing"
         :class="isPending(index) && 'opacity-50 outline outline-2 outline-dashed outline-accent'"
+        @pointerdown="dragging = false"
+        @click="onOpen"
         @dragstart="onDragStart($event, index)"
         @dragend="gen.endDrag"
         @dragover="onDragOver($event, index)"

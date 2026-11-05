@@ -20,6 +20,7 @@ macOS only: JPEG decoding is handed to `sips`, which saves pulling an image
 library into a project that otherwise needs none.
 """
 
+import collections
 import pathlib
 import struct
 import subprocess
@@ -70,17 +71,62 @@ def pixel_reader(d, off, w, h, stride, topdown):
 # into neighbouring artwork comes out too long and is dropped, which is why
 # several thresholds are tried and the best-shaped result wins.
 
-IDEAL_W, IDEAL_H = 0.285, 0.042
+# The library's own median plate, measured once the finder was trusted. A
+# plate 14 pixels tall on a 570 pixel template is thin but real; with the
+# ideal set at 0.042 it lost to a plate-shaped patch of white suit.
+IDEAL_W, IDEAL_H = 0.285, 0.032
 # Pixels the plate mask is grown by, at template resolution.
 GROW = 3
 IDEAL_TOP_Y, IDEAL_BOTTOM_Y = 0.048, 0.932
+# Strictest first. A plate is a solid bar, near black or near white, so a box
+# found at a strict threshold is the better bet: each step looser costs
+# STRICTNESS on the shape score, which is what stops a dark tentacle found
+# only at the loosest setting beating a black treasure-chest lid found at all
+# of them on a hair's difference in shape.
 DARK_THRESHOLDS = (10, 16, 24, 32, 42, 55, 70, 85)
 LIGHT_THRESHOLDS = (225, 205, 190, 172, 155)
+STRICTNESS = 0.04
+# A plate that is a cut-out, showing the grey behind, costs this much more
+# again, so it is only believed where nothing solid is on offer. So does a
+# pale plate: fifteen frames in the library have one, and a pale patch the
+# shape of a plate is found on any white frame.
+CUTOUT = 0.15
+PALE = 0.15
+# Pixels within this of the grey the templates are rendered on, summed over
+# the channels, are background: the empty panel and the margin beyond the
+# frame. They are never part of a plate. The looser dark thresholds sit
+# above that grey's luma, and before background was excluded they ran a
+# plate into the margin, or found one there that did not exist.
+BACKGROUND = 30
 
-def runs(row, thresh, lo, hi, light):
+def background_colour(pixel, w, h):
+    """The grey the template is rendered on.
+
+    It is not one fixed grey: the templates were captured in batches, and
+    the batches differ by a few levels. Nor is a corner reliable, since some
+    frames run their art right into it. The commonest colour along the
+    picture's outer edge is the margin on every template checked.
+    """
+    seen = collections.Counter()
+    for x in range(w):
+        seen[pixel(x, 0)] += 1
+        seen[pixel(x, h - 1)] += 1
+    for y in range(h):
+        seen[pixel(0, y)] += 1
+        seen[pixel(w - 1, y)] += 1
+    return seen.most_common(1)[0][0]
+
+def row_background(d, off, w, stride, topdown, h, y, grey):
+    base = off + (y if topdown else h - 1 - y) * stride
+    row = d[base:base + w * 3]
+    gr, gg, gb = grey
+    return bytes(map(lambda b, g, r: 1 if abs(r - gr) + abs(g - gg) + abs(b - gb) <= BACKGROUND else 0,
+                     row[0::3], row[1::3], row[2::3]))
+
+def runs(row, background, thresh, lo, hi, light):
     found, start = [], -1
     for x, v in enumerate(row):
-        if (v >= thresh) if light else (v <= thresh):
+        if not background[x] and ((v >= thresh) if light else (v <= thresh)):
             if start < 0:
                 start = x
         elif start >= 0:
@@ -93,9 +139,9 @@ def runs(row, thresh, lo, hi, light):
 
 def boxes_in(rows, w, thresh, lo, hi, min_h, light):
     live, done = [], []
-    for y, row in rows:
+    for y, row, background in rows:
         used = set()
-        for sx, rw in runs(row, thresh, lo, hi, light):
+        for sx, rw in runs(row, background, thresh, lo, hi, light):
             hit = -1
             for i, b in enumerate(live):
                 if i not in used and b['last'] == y - 1 and sx < b['x1'] and sx + rw > b['x0']:
@@ -118,6 +164,10 @@ def shape_score(box, w, h, which):
     wf, hf, aspect = bw / w, bh / h, bw / max(1, bh)
     if not (0.16 <= wf <= 0.50) or not (0.017 <= hf <= 0.095) or not (2.2 <= aspect <= 15):
         return None
+    # A plate sits on the frame art, never against the picture's edge. A box
+    # that reaches the edge is a border element with the margin behind it.
+    if x <= w * 0.01 or x + bw >= w * 0.99:
+        return None
     want_y = IDEAL_TOP_Y if which == 'top' else IDEAL_BOTTOM_Y
     return (abs(wf - IDEAL_W) / IDEAL_W + abs(hf - IDEAL_H) / IDEAL_H
             + abs(y / h - want_y) * 6)
@@ -131,27 +181,39 @@ def best_in_band(rows, w, h, thresh, which, light):
 
 def find_plates(d, off, w, h, stride, topdown):
     """Top and bottom may use different thresholds: some frames put the code on
-    a dark plaque and the numbers on a pale one."""
-    bands = {}
-    for label, y0, y1 in (('top', 0, int(h * 0.20)), ('bottom', int(h * 0.80), h)):
-        bands[label] = [(y, row_luma(d, off, w, stride, topdown, h, y)) for y in range(y0, y1)]
+    a dark plaque and the numbers on a pale one.
 
+    A few frames have no plaque at all: the plate is a cut-out, and the
+    template shows the grey behind it. Each band is also searched with the
+    background allowed into a plate, at a cost, so a cut-out is found where
+    nothing solid is, and never preferred to a solid bar beside it.
+
+    Each plate comes back as (box, threshold, light, cutout): what found it,
+    which is what the mask is cut with.
+    """
+    grey = background_colour(pixel_reader(d, off, w, h, stride, topdown), w, h)
     options = {'top': [], 'bottom': []}
-    for label, rows in bands.items():
-        for light, thresholds in ((False, DARK_THRESHOLDS), (True, LIGHT_THRESHOLDS)):
-            for th in thresholds:
-                hit = best_in_band(rows, w, h, th, label, light)
-                if hit:
-                    options[label].append((*hit, th, light))
+    for cutout in (False, True):
+        for label, y0, y1 in (('top', 0, int(h * 0.20)), ('bottom', int(h * 0.80), h)):
+            rows = [(y, row_luma(d, off, w, stride, topdown, h, y),
+                     bytes(w) if cutout else row_background(d, off, w, stride, topdown, h, y, grey))
+                    for y in range(y0, y1)]
+            for light, thresholds in ((False, DARK_THRESHOLDS), (True, LIGHT_THRESHOLDS)):
+                for looseness, th in enumerate(thresholds):
+                    hit = best_in_band(rows, w, h, th, label, light)
+                    if hit:
+                        score, box = hit
+                        score += STRICTNESS * looseness + (CUTOUT if cutout else 0) + (PALE if light else 0)
+                        options[label].append((score, (box, th, light, cutout)))
 
     best = None
-    for ts, tb, tth, tlight in options['top']:
-        for bs, bb, bth, blight in options['bottom']:
+    for ts, top in options['top']:
+        for bs, bottom in options['bottom']:
             # Plates almost always match each other in size; prefer pairs that do.
-            agree = abs(tb[3] - bb[3]) / h * 4 + abs(tb[2] - bb[2]) / w
+            agree = abs(top[0][3] - bottom[0][3]) / h * 4 + abs(top[0][2] - bottom[0][2]) / w
             total = ts + bs + agree
             if best is None or total < best[0]:
-                best = (total, (tb, tth, tlight), (bb, bth, blight))
+                best = (total, top, bottom)
     return best
 
 # ----------------------------------------------------------- border pictures
@@ -159,8 +221,20 @@ def find_plates(d, off, w, h, stride, topdown):
 # A frame is recognised by a small lightness picture of its border. Lightness
 # is (max + min) / 2 of the RGB, which is what survives the bot's dye: every
 # frame it prints is recoloured to the card's theme, and the ring of border
-# compared at match time is weighted by how much of each cell is artwork
-# rather than the empty middle, which holds character art on a real card.
+# compared at match time is weighted by how much of each cell is frame rather
+# than panel, which holds character art on a real card.
+#
+# What counts as panel is decided by texture, not colour. Many templates tint
+# the panel: grimrose fades it to red and scatters petals over it, ashes glows
+# orange at the ends. On a card that tint lies over the art, so the art's
+# lightness is what shows through, and a cell there is noise whatever the tint
+# looks like next to the plain grey at the centre. Comparing colours against
+# that grey is what used to count a tinted panel as frame, and a card with
+# light art in a tinted frame then matched nothing. Tints and gradients are
+# smooth, though, where frame art is all edges, so the panel is taken to be
+# the smooth region reachable from the centre, plus any specks enclosed in
+# it. The grey beyond the frame's outer edge is smooth too and is not frame
+# either: on a card it holds the glow, which takes the dye like everything.
 
 PRINT_W, PRINT_H = 64, 96
 # Outer sixth of the picture on each side is the ring that is compared.
@@ -168,45 +242,185 @@ RING_X, RING_Y = 11, 16
 # Lightness and weight are quantised before they are written. Correlation does
 # not care, and the sprite deflates to a third of the size.
 PRINT_LEVELS, WEIGHT_LEVELS = 16, 4
-# Colour distance from the empty panel beyond which a pixel counts as border.
-BORDER = 40
+# A pixel differing from a neighbour by more than this, summed over the three
+# channels, is an edge. Gradients and JPEG noise stay well under it; the edge
+# of a petal or a plate is several times over.
+SMOOTH = 18
+# Edges are found at full size, then pooled down by this factor before the
+# panel is traced, so a one pixel line still fences the panel off and the
+# tracing walks a few thousand cells rather than a few hundred thousand pixels.
+POOL = 3
+# An edged patch enclosed by panel smaller than this share of the picture is
+# a speck on the panel. A plate sitting in the panel is bigger and stays frame.
+SPECK = 0.005
 # Two frames whose border pictures differ by less than this, with the same
 # plates, are the same file uploaded twice.
 DUPLICATE = 3.0
 
+def edges(d, off, w, h, stride, topdown):
+    """Where the template has an edge, pooled to 1/POOL: 1 for an edged cell.
+
+    Neighbour differences are taken with map() over channel slices, which
+    keeps the per-pixel work in C. Each POOL x POOL block then keeps its
+    maximum, so a thin line is never averaged away.
+    """
+    def diff(a, b):
+        return map(lambda p, q: abs(p - q), a, b)
+
+    def total(a, b, c):
+        return map(lambda p, q, s: p + q + s, a, b, c)
+
+    channels = []
+    for y in range(h):
+        base = off + (y if topdown else h - 1 - y) * stride
+        row = d[base:base + w * 3]
+        channels.append((row[0::3], row[1::3], row[2::3]))
+
+    edged = []
+    for y in range(h):
+        b, g, r = channels[y]
+        across = list(total(diff(b[1:], b[:-1]), diff(g[1:], g[:-1]), diff(r[1:], r[:-1]))) + [0]
+        if y + 1 < h:
+            b2, g2, r2 = channels[y + 1]
+            down = total(diff(b, b2), diff(g, g2), diff(r, r2))
+        else:
+            down = [0] * w
+        edged.append(bytes(map(lambda p, q: 1 if p > SMOOTH or q > SMOOTH else 0, across, down)))
+
+    pw, ph = -(-w // POOL), -(-h // POOL)
+    out = bytearray(pw * ph)
+    for py in range(ph):
+        block = edged[py * POOL:(py + 1) * POOL]
+        merged = block[0] if len(block) == 1 else bytes(map(max, *block))
+        for px in range(pw):
+            out[py * pw + px] = max(merged[px * POOL:(px + 1) * POOL])
+    return out, pw, ph
+
+def flood(pw, ph, seeds, passable):
+    """Cells reachable from the seeds, moving only through passable cells."""
+    seen = bytearray(pw * ph)
+    queue = collections.deque()
+    for i in seeds:
+        if passable(i) and not seen[i]:
+            seen[i] = 1
+            queue.append(i)
+    while queue:
+        i = queue.popleft()
+        x, y = i % pw, i // pw
+        for j in (i - 1 if x > 0 else -1, i + 1 if x < pw - 1 else -1,
+                  i - pw if y > 0 else -1, i + pw if y < ph - 1 else -1):
+            if j >= 0 and not seen[j] and passable(j):
+                seen[j] = 1
+                queue.append(j)
+    return seen
+
+def neighbours(i, pw, ph):
+    x, y = i % pw, i // pw
+    return [j for j in (i - 1 if x > 0 else -1, i + 1 if x < pw - 1 else -1,
+                        i - pw if y > 0 else -1, i + pw if y < ph - 1 else -1) if j >= 0]
+
+def frame_mask(d, off, w, h, stride, topdown):
+    """Which cells are frame, at 1/POOL scale, and whether the panel leaked.
+
+    Frame is everything that is neither the panel nor the margin. The margin
+    is whatever smooth region touches the picture's edge, seeded from every
+    edge cell because a thorn or a leaf reaching the edge cuts it into
+    pieces. The panel is the smooth region around the centre, which is
+    allowed to step across a single edged cell to carry on: petals and
+    doodles scattered over a tinted panel are one cell wide once pooled,
+    where a border is at least two, and the margin is never entered at all.
+    A leak means the panel reached the margin anyway, through a gap in the
+    border; the frame is then only the edged cells, which still compares,
+    but the frame is listed so someone can look at it.
+    """
+    edged, pw, ph = edges(d, off, w, h, stride, topdown)
+    smooth = lambda i: not edged[i]
+
+    rim = [i for i in range(pw * ph) if i % pw in (0, pw - 1) or i // pw in (0, ph - 1)]
+    outside = flood(pw, ph, rim, smooth)
+    inside = lambda i: not edged[i] and not outside[i]
+
+    cx, cy = pw // 2, ph // 2
+    seeds = [y * pw + x for y in range(cy - 3, cy + 4) for x in range(cx - 3, cx + 4)]
+    panel = flood(pw, ph, seeds, inside)
+    while True:
+        # Edged cells beside the panel with open panel beyond them.
+        steps = [i for i in range(pw * ph) if edged[i] and not panel[i]
+                 and any(panel[j] for j in neighbours(i, pw, ph))
+                 and any(inside(j) and not panel[j] for j in neighbours(i, pw, ph))]
+        if not steps:
+            break
+        for i in steps:
+            panel[i] = 1
+        beyond = [j for i in steps for j in neighbours(i, pw, ph) if inside(j) and not panel[j]]
+        grown = flood(pw, ph, beyond, lambda i: inside(i) and not panel[i])
+        for i in range(pw * ph):
+            if grown[i]:
+                panel[i] = 1
+    leaked = any(outside[j] for i in range(pw * ph) if panel[i] for j in neighbours(i, pw, ph))
+
+    # Specks: edged patches with nothing but panel around them. Each patch of
+    # cells that is neither panel nor margin is traced; one that never touches
+    # the margin and is small is a petal or a doodle on the panel, not frame.
+    seen = bytearray(pw * ph)
+    for i0 in range(pw * ph):
+        if panel[i0] or outside[i0] or seen[i0]:
+            continue
+        patch, k, touches = [i0], 0, False
+        seen[i0] = 1
+        while k < len(patch):
+            i = patch[k]
+            k += 1
+            x, y = i % pw, i // pw
+            for j in (i - 1 if x > 0 else -1, i + 1 if x < pw - 1 else -1,
+                      i - pw if y > 0 else -1, i + pw if y < ph - 1 else -1):
+                if j < 0:
+                    touches = True
+                elif outside[j]:
+                    touches = True
+                elif not seen[j] and not panel[j]:
+                    seen[j] = 1
+                    patch.append(j)
+        if not touches and len(patch) < SPECK * pw * ph:
+            for i in patch:
+                panel[i] = 1
+
+    frame = bytearray(pw * ph)
+    for i in range(pw * ph):
+        frame[i] = 0 if panel[i] or outside[i] else 255
+    return frame, pw, ph, leaked
+
+def shrink(rows, w, h):
+    """Box-average a w x h picture, given as rows, down to PRINT_W x PRINT_H."""
+    out = bytearray(PRINT_W * PRINT_H)
+    for cy in range(PRINT_H):
+        ay, by = cy * h // PRINT_H, max(cy * h // PRINT_H + 1, (cy + 1) * h // PRINT_H)
+        for cx in range(PRINT_W):
+            ax, bx = cx * w // PRINT_W, max(cx * w // PRINT_W + 1, (cx + 1) * w // PRINT_W)
+            total = 0
+            for y in range(ay, by):
+                total += sum(rows[y][ax:bx])
+            out[cy * PRINT_W + cx] = round(total / ((by - ay) * (bx - ax)))
+    return out
+
 def thumbnail(d, off, w, h, stride, topdown):
-    """Lightness and border share of the frame at PRINT_W x PRINT_H.
+    """Lightness and frame share of the template at PRINT_W x PRINT_H.
 
     Rows are pulled apart into their channels with slices and combined with
     map(), which keeps the per-pixel work in C. A pure Python loop over every
     pixel of a few hundred templates would take minutes.
     """
-    mid = off + ((h // 2) if topdown else (h - 1 - h // 2)) * stride + (w // 2) * 3
-    eb, eg, er = d[mid], d[mid + 1], d[mid + 2]
-
-    light_rows, border_rows = [], []
+    light_rows = []
     for y in range(h):
         base = off + (y if topdown else h - 1 - y) * stride
         row = d[base:base + w * 3]
         b, g, r = row[0::3], row[1::3], row[2::3]
         hi, lo = map(max, r, g, b), map(min, r, g, b)
         light_rows.append([(a + c) >> 1 for a, c in zip(hi, lo)])
-        border_rows.append([255 if abs(pr - er) + abs(pg - eg) + abs(pb - eb) >= BORDER else 0
-                            for pr, pg, pb in zip(r, g, b)])
 
-    def shrink(rows):
-        out = bytearray(PRINT_W * PRINT_H)
-        for cy in range(PRINT_H):
-            ay, by = cy * h // PRINT_H, max(cy * h // PRINT_H + 1, (cy + 1) * h // PRINT_H)
-            for cx in range(PRINT_W):
-                ax, bx = cx * w // PRINT_W, max(cx * w // PRINT_W + 1, (cx + 1) * w // PRINT_W)
-                total = 0
-                for y in range(ay, by):
-                    total += sum(rows[y][ax:bx])
-                out[cy * PRINT_W + cx] = round(total / ((by - ay) * (bx - ax)))
-        return out
-
-    return shrink(light_rows), shrink(border_rows)
+    frame, pw, ph, leaked = frame_mask(d, off, w, h, stride, topdown)
+    frame_rows = [frame[y * pw:(y + 1) * pw] for y in range(ph)]
+    return shrink(light_rows, w, h), shrink(frame_rows, pw, ph), leaked
 
 RING = [y * PRINT_W + x for y in range(PRINT_H) for x in range(PRINT_W)
         if x < RING_X or x >= PRINT_W - RING_X or y < RING_Y or y >= PRINT_H - RING_Y]
@@ -231,7 +445,8 @@ def plate_mask(pixel, w, h, plates):
     """
     alpha = bytearray(w * h)
     regions = []
-    for (box, thresh, light) in plates:
+    gr, gg, gb = background_colour(pixel, w, h)
+    for (box, thresh, light, cutout) in plates:
         x, y, bw, bh = box
         pad = GROW + 2
         x0, y0 = max(0, x - pad), max(0, y - pad)
@@ -241,6 +456,10 @@ def plate_mask(pixel, w, h, plates):
             row = yy * w
             for xx in range(x0, x1):
                 r, g, b = pixel(xx, yy)
+                # Panel showing between the plate and the box's padding is
+                # not plate, however dark the threshold that found it.
+                if not cutout and abs(r - gr) + abs(g - gg) + abs(b - gb) <= BACKGROUND:
+                    continue
                 luma = (r * 299 + g * 587 + b * 114) // 1000
                 if (luma >= thresh) if light else (luma <= thresh):
                     alpha[row + xx] = 255
@@ -341,7 +560,7 @@ def main():
     for stale in MASKS.glob('*.png'):
         stale.unlink()
 
-    kept, skipped, duplicates, thin = [], [], [], []
+    kept, skipped, duplicates, thin, leaked, cutouts = [], [], [], [], [], []
     with tempfile.TemporaryDirectory() as tmp:
         cache = pathlib.Path(tmp)
         for n, path in enumerate(files, 1):
@@ -357,8 +576,10 @@ def main():
             def per_mille(box):
                 return [round(v * 1000) for v in (box[0] / w, box[1] / h, box[2] / w, box[3] / h)]
 
-            plates = per_mille(top[0]) + per_mille(bottom[0])
-            light, weight = thumbnail(d, off, w, h, stride, topdown)
+            plates = per_mille(top[0]) + [int(top[2])] + per_mille(bottom[0]) + [int(bottom[2])]
+            light, weight, leak = thumbnail(d, off, w, h, stride, topdown)
+            if leak:
+                leaked.append(name)
 
             twin = next((k for k in kept if same_plates(k['plates'], plates)
                          and ring_difference(k['light'], light) < DUPLICATE), None)
@@ -371,6 +592,8 @@ def main():
 
             pixel = pixel_reader(d, off, w, h, stride, topdown)
             write_mask_png(MASKS / f'{name}.png', w, h, plate_mask(pixel, w, h, (top, bottom)))
+            if top[3] or bottom[3]:
+                cutouts.append(name)
             kept.append({'name': name, 'plates': plates, 'score': score, 'light': light, 'weight': weight})
             if n % 100 == 0:
                 print(f'  {n}/{len(files)}', flush=True)
@@ -380,7 +603,7 @@ def main():
     rows = []
     for k in kept:
         p = k['plates']
-        rows.append('|'.join((k['name'], ','.join(map(str, p[:4])), ','.join(map(str, p[4:])),
+        rows.append('|'.join((k['name'], ','.join(map(str, p[:5])), ','.join(map(str, p[5:])),
                               str(round(k['score'] * 100)))))
     body = '\n'.join(rows)
 
@@ -391,10 +614,12 @@ def main():
         '//   name | code plate | numbers plate | confidence\n'
         '//\n'
         '// Plates are x,y,w,h in thousandths of the frame\'s width and height, taken\n'
-        '// from the solid bar the card bot prints its text onto. They are the fallback\n'
+        '// from the solid bar the card bot prints its text onto, then 1 for a pale\n'
+        '// plate with dark text or 0 for the usual dark one. The box is the fallback\n'
         '// shape; the exact outline lives in public/card-frame-masks/<name>.png,\n'
         '// because a plate is only about 88% rectangular and a box would spill black\n'
-        '// onto the artwork around it.\n'
+        '// onto the artwork around it. The polarity is what a match is checked\n'
+        '// against: a frame whose plates would land on the wrong tone is not the one.\n'
         '//\n'
         '// Confidence is the shape score the finder settled on, times 100. Higher means\n'
         '// the plate looked less like the usual one, so it is worth a glance.\n'
@@ -419,6 +644,10 @@ def main():
         print(f'  {len(duplicates)} duplicate(s) collapsed: {", ".join(duplicates)}')
     if thin:
         print(f'  little border in the ring, may be hard to recognise: {", ".join(thin)}')
+    if leaked:
+        print(f'  panel reached the edge, compared on edges only: {", ".join(leaked)}')
+    if cutouts:
+        print(f'  plates are cut-outs showing the grey behind: {", ".join(cutouts)}')
     if skipped:
         print(f'  no plates found, left out: {", ".join(skipped)}')
         print('  cards using those fall back to scanning for the bars.')

@@ -34,6 +34,26 @@ const addButtons = [
   { size: 'multi', label: 'Multi', hint: 'Add multiple matchups (4+ cards)' },
 ]
 
+/**
+ * The line under the gallery, which doubles as the hint for the buttons below.
+ *
+ * All three act on every matchup at once, which their one-word labels do not
+ * say, and Clear cannot be taken back. Hovering one explains it on the line
+ * the reader is already looking at, rather than in a tooltip by the cursor.
+ */
+const GALLERY_HINT = 'Drag around cards to reorder'
+const hint = ref('')
+
+/** Handlers that put a button's hint on that line while it is pointed at. */
+function hintOn(message) {
+  return {
+    mouseenter: () => { hint.value = message },
+    mouseleave: () => { hint.value = '' },
+    focus: () => { hint.value = message },
+    blur: () => { hint.value = '' },
+  }
+}
+
 function start(size) {
   if (size === 'multi') multiInput.value?.click()
   else gen.startDraft(size)
@@ -81,6 +101,9 @@ function onOutside(event) {
 
 function clearAll() {
   confirming.value = false
+  // The line this was showing on goes with the matchups, and nothing will
+  // tell us the pointer has left a button that is no longer there.
+  hint.value = ''
   gen.clearAll()
 }
 
@@ -171,7 +194,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
         </p>
 
         <p v-if="gen.matchups.value.length" class="pt-3 text-center text-xs text-muted/70">
-          Drag around cards to reorder
+          {{ hint || GALLERY_HINT }}
         </p>
       </div>
 
@@ -186,6 +209,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
             :class="gen.versusReady.value
               ? 'bg-danger text-white hover:opacity-90'
               : 'cursor-not-allowed bg-surface text-muted'"
+            v-on="hintOn('Delete all matchups')"
             @click="confirming = true"
           >
             Clear
@@ -198,6 +222,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
             :class="gen.versusReady.value
               ? 'bg-line text-ink hover:opacity-90'
               : 'cursor-not-allowed bg-surface text-muted'"
+            v-on="hintOn('Randomize order of all cards')"
             @click="gen.shuffleMatchups"
           >
             Shuffle
@@ -210,6 +235,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutside))
             :class="gen.versusReady.value && !gen.busy.value
               ? 'bg-accent text-canvas hover:opacity-90'
               : 'cursor-not-allowed bg-surface text-muted'"
+            v-on="hintOn('Download all matchups')"
             @click="gen.downloadMatchups"
           >
             {{ gen.busy.value ? 'Working…' : 'Download' }}

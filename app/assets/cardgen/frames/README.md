@@ -36,24 +36,34 @@ pulling an image library into a project that otherwise needs none.
 The bot dyes every frame to the card's theme, so a card's colours say nothing
 about which frame it has: celestial is blue and gold as a template and solid
 green on a card. The pattern of light and dark in the border survives the dye,
-so only lightness is compared, by correlation, which also shrugs off a dye
-that darkens or brightens the whole frame.
+so lightness is what is compared, by correlation, which also shrugs off a dye
+that darkens or brightens the whole frame. Half the score is the border's
+relief, each cell less the cells beside it: the thorns, petals and rivets.
+Light against dark is easy to match by accident; a hundred small edges in the
+right places are not.
 
-Only a ring around the border is compared, because the middle is character
-art that differs on every card. Each cell of the ring is weighted by how much
-of it is artwork on the template, so a frame with thin side borders is not
-compared on the empty middle.
+Only a ring around the border is compared, and only the cells of it that are
+wholly frame on the template, a cell in from the panel. The panel holds
+character art on a real card, and art is what used to break this: a frame
+whose border is a light bar on a dark margin read like any card whose art was
+light right up to its frame. Many templates tint or speckle their panel, so
+what is panel is decided by texture rather than colour: the smooth region
+around the centre, petals and all, and the grey beyond the frame's outer
+edge, which holds the glow on a card.
 
 Every card the bot makes is the same shape: a 254 x 380 frame centred on a
 274 x 405 image, with a glow in the ten pixel margin. The ring is read from
-that fixed position, which is what makes the match a few milliseconds and the
-mask land exactly. There is no search for the frame's position.
+that position, then a pixel either way for the leading candidates, since
+relief only lines up when the reading does. A picture with the margin cropped
+off is tried as well, as a frame filling the whole of it.
 
-A match is accepted on how far the winner leads the nearest frame whose plates
-sit somewhere else, not on its score alone. A card that owns its frame leads by
-a wide margin; a card whose frame is missing is surrounded by equally poor
-candidates. Two frames with the same plates are not rivals, since confusing
-them would not move the mask.
+A frame is only believed if the card is the right tone where that frame says
+its plates are: dark under a dark plate, pale under a pale one. Then a match
+is accepted on its score and on how far it leads the nearest frame whose
+plates sit somewhere else. A card that owns its frame leads by a wide margin;
+a card whose frame is missing is surrounded by equally poor candidates. Two
+frames with the same plates are not rivals, since confusing them would not
+move the mask.
 
 The real cards in `../test-cards` are what this is calibrated and checked
 against. Run `npm run check:cardgen` after changing any of it.
@@ -64,7 +74,11 @@ Nothing breaks. A card that matches nothing falls back to finding the dark bars
 by scanning, then to reading the text, and the boxes can always be nudged by
 hand. Adding the template just makes it exact.
 
-## Known gaps
+## Plates that are not plaques
 
-`frame-tarotcard` has no entry: its plates sit on a navy card at too low a
-contrast for the finder. Cards using it take the fallback path.
+Most frames print onto a solid bar, near black or near white, and the finder
+prefers those: a bar found at a strict threshold beats one that only shows
+up at a loose one. A few frames (banliang, candyland, frostedglass, panda,
+poolside) have a cut-out instead, where the template shows the grey behind
+it; those are found with the background allowed in, at a cost, so a cut-out
+is never preferred to a solid bar beside it. The build lists them.

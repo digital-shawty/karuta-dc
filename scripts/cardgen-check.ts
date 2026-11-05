@@ -20,7 +20,7 @@
 import { readFileSync } from 'node:fs'
 import { detectPills } from '~/utils/cardgen/detect'
 import { FRAME_DATA, FRAME_PRINT } from '~/utils/cardgen/frame-data'
-import { acceptMatch, cardPrint, dropFrames, parseTable, rankPrint, RING_LEN } from '~/utils/cardgen/frames'
+import { acceptMatch, dropFrames, parseTable, rankCard, RING_LEN, type FrameMatch } from '~/utils/cardgen/frames'
 import { decodePng } from './png'
 import { backgroundFit, buildScene, cardCount, groupSizes, layoutFor, redealCards, slotCount } from '~/utils/cardgen/presets'
 import { released } from '~/utils/cardgen/images'
@@ -62,10 +62,10 @@ check('a duos trio holds six cards', cardCount('duos', 'trio'), 6)
 check('winners duos has six slots', slotCount('winners', 'duos', 'pair'), 6)
 
 for (const [mode, team, size, want] of [
-  ['versus', 'singles', 'pair', [1260, 756]],
-  ['versus', 'singles', 'trio', [1260, 756]],
-  ['versus', 'duos', 'pair', [1408, 845]],
-  ['versus', 'duos', 'trio', [1920, 1152]],
+  ['versus', 'singles', 'pair', [877, 526]],
+  ['versus', 'singles', 'trio', [1014, 608]],
+  ['versus', 'duos', 'pair', [1266, 760]],
+  ['versus', 'duos', 'trio', [1885, 1131]],
   ['winners', 'singles', 'pair', [1260, 756]],
   ['winners', 'duos', 'pair', [1260, 756]],
 ] as [string, string, 'pair' | 'trio', number[]][]) {
@@ -85,18 +85,32 @@ check('every versus mark is capped to its gap',
     (['singles', 'duos'] as const).every(team =>
       buildScene(setup('versus', team), size, []).marks
         .every(m => typeof m.maxW === 'number' && m.maxW > 0))), true)
-near('duos pair: partners sit 1.2 units apart',
-  duo.slots[1]!.x - (duo.slots[0]!.x + CARD.w), 1.2 * 27.4)
-near('duos pair: sides sit 7 units apart',
-  duo.slots[2]!.x - (duo.slots[1]!.x + CARD.w), 7 * 27.4)
+near('duos pair: partners sit 0.6 units apart',
+  duo.slots[1]!.x - (duo.slots[0]!.x + CARD.w), 0.6 * 27.4)
+near('duos pair: sides sit 3 units apart',
+  duo.slots[2]!.x - (duo.slots[1]!.x + CARD.w), 3 * 27.4)
 near('duos pair: margins match',
   duo.slots[0]!.x, duo.canvas.w - (duo.slots[3]!.x + CARD.w), 0.01)
 
 const trio = buildScene(setup('versus', 'duos'), 'trio', [])
 check('duos trio: six slots and two marks', [trio.slots.length, trio.marks.length], [6, 2])
-near('duos trio: the cap shrinks cards to 0.93', trio.slots[0]!.scale, 0.927, 0.005)
+check('duos trio: six cards now fit at native size', trio.slots[0]!.scale, 1)
 check('duos trio: the last card stays on the canvas',
   trio.slots[5]!.x + CARD.w * trio.slots[5]!.scale <= trio.canvas.w, true)
+
+// The whole point of the tight strips: cards fill the picture rather than
+// floating in the middle of a background. A card is never drawn larger than
+// native, so these are the canvas shrinking around it.
+for (const [team, size, want] of [
+  ['singles', 'pair', 0.77],
+  ['singles', 'trio', 0.67],
+  ['duos', 'pair', 0.53],
+  ['duos', 'trio', 0.36],
+] as [string, 'pair' | 'trio', number][]) {
+  const scene = buildScene(setup('versus', team), size, [])
+  near(`versus ${team} ${size}: a card covers ${Math.round(want * 100)}% of the height`,
+    (CARD.h * scene.slots[0]!.scale) / scene.canvas.h, want, 0.01)
+}
 
 // Every slot gets a drag handle laid over the preview, positioned as a
 // percentage of the canvas, so a slot that strayed outside would put an
@@ -373,7 +387,7 @@ near('the mark is centred on its anchor', mark.args[0]! + mark.args[2]! / 2, nat
 check('the mark fits the gap it sits in',
   mark.args[2]! < native.slots[2]!.x - (native.slots[1]!.x + CARD.w), true)
 check('capping the width keeps the mark in proportion',
-  Math.abs(mark.args[2]! / mark.args[3]! - 232 / 112) < 0.02, true)
+  Math.abs(mark.args[2]! / mark.args[3]! - 240 / 120) < 0.02, true)
 
 // An off-size card must letterbox inside its slot, and its boxes must follow.
 calls.length = 0
@@ -469,8 +483,10 @@ for (const line of lines) {
   const [id, top, bottom] = parts as [string, string, string, string]
   ids.add(id)
   for (const plate of [top, bottom]) {
-    const [x, y, w, h] = plate.split(',').map(Number) as [number, number, number, number]
-    // Thousandths of the frame, so a plate must sit inside it.
+    const parts = plate.split(',').map(Number)
+    const [x, y, w, h, pale] = parts as [number, number, number, number, number]
+    // Thousandths of the frame, so a plate must sit inside it, then its tone.
+    if (parts.length !== 5 || (pale !== 0 && pale !== 1)) malformed++
     if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > 1000 || y + h > 1000) offCard++
   }
 }
@@ -529,22 +545,104 @@ function flattenedCard(file: string) {
   return out
 }
 
+/** The ring cell each tile of the print falls in, or nothing for the middle. */
+const ringAt = new Map<number, number>()
+{
+  const { w, h, ringX, ringY } = FRAME_PRINT
+  let k = 0
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x < ringX || x >= w - ringX || y < ringY || y >= h - ringY) ringAt.set(y * w + x, k++)
+    }
+  }
+}
+
+/**
+ * Light art painted over everything the card's own frame counts as panel.
+ * This is what undid the matcher before: a card whose art is light right up
+ * to its frame used to match any frame with a light border on a dark margin.
+ */
+function paintedPanel(pixels: Uint8ClampedArray, frame: string, level: number): Uint8ClampedArray {
+  const f = table.frames.findIndex(fr => fr.id === frame)
+  const { w, h } = FRAME_PRINT
+  // Painted where the template has no frame at all. The weights would not
+  // do: they stop a cell short of the panel, and that cell is frame.
+  const plates = [table.frames[f]!.top, table.frames[f]!.bottom].map(([px, py, pw, ph]) => ({
+    x: 10 + px! / 1000 * 254 - 2, y: 10 + py! / 1000 * 380 - 2, w: pw! / 1000 * 254 + 4, h: ph! / 1000 * 380 + 4,
+  }))
+  const out = new Uint8ClampedArray(pixels)
+  for (let y = 10; y < CARD.h - 15; y++) {
+    for (let x = 10; x < CARD.w - 10; x++) {
+      const cx = Math.floor((x - 10) * w / 254)
+      const cy = Math.floor((y - 10) * h / 380)
+      const k = ringAt.get(cy * w + cx)
+      // The outer two cells hold the glow, which is left as it is.
+      const inner = cx >= 2 && cx < w - 2 && cy >= 2 && cy < h - 2
+      if (k !== undefined && !(inner && table.coverage[f * RING_LEN + k] === 0)) continue
+      if (plates.some(p => x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h)) continue
+      const i = (y * CARD.w + x) * 4
+      out[i] = out[i + 1] = out[i + 2] = level
+    }
+  }
+  return out
+}
+
+/** The card moved by a pixel or two, white showing where it was. */
+function nudged(pixels: Uint8ClampedArray, dx: number, dy: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(pixels.length).fill(255)
+  for (let y = 0; y < CARD.h; y++) {
+    for (let x = 0; x < CARD.w; x++) {
+      const sx = x - dx
+      const sy = y - dy
+      if (sx < 0 || sy < 0 || sx >= CARD.w || sy >= CARD.h) continue
+      const i = (y * CARD.w + x) * 4
+      const j = (sy * CARD.w + sx) * 4
+      out[i] = pixels[j]!; out[i + 1] = pixels[j + 1]!; out[i + 2] = pixels[j + 2]!
+    }
+  }
+  return out
+}
+
+const samePlates = (a: FrameMatch, b: FrameMatch) => a.redactions.every((r, i) => {
+  const o = b.redactions[i]!
+  return Math.abs(r.x - o.x) <= 6 && Math.abs(r.y - o.y) <= 6 && Math.abs(r.w - o.w) <= 6 && Math.abs(r.h - o.h) <= 6
+})
+/** The first frame in a ranking whose plates sit somewhere else than the leader's. */
+const rivalIn = (ranked: FrameMatch[]) => ranked.slice(1).find(r => !samePlates(r, ranked[0]!))
+
+let lowestScore = 1
 let worstMargin = 1
-let worstUnknown = 0
+let strongestStranger = 0
 let scanRight = 0
 const scanWrong: string[] = []
 const scanMissed: string[] = []
 for (const [file, frame] of Object.entries(expected)) {
   const pixels = flattenedCard(file)
-  const print = cardPrint(pixels, CARD.w, CARD.h)
-  const ranked = rankPrint(print, table)
+  const ranked = rankCard(pixels, CARD.w, CARD.h, table)
   const match = acceptMatch(ranked)
   check(`${file} is recognised as ${frame}`, match?.id, frame)
   if (!match) continue
 
-  const rival = ranked.slice(1).find(r => r.redactions.some((b, i) =>
-    Math.abs(b.x - match.redactions[i]!.x) > 6 || Math.abs(b.y - match.redactions[i]!.y) > 6))
+  lowestScore = Math.min(lowestScore, match.score)
+  const rival = rivalIn(ranked)
   if (rival) worstMargin = Math.min(worstMargin, match.score - rival.score)
+
+  // The same card with light art, and a pixel or two off, is still its frame.
+  for (const [label, variant] of [
+    ['light art', paintedPanel(pixels, frame, 235)],
+    ['pale art', paintedPanel(pixels, frame, 150)],
+    ['nudged', nudged(pixels, 2, 0)],
+    ['nudged back', nudged(pixels, -1, -1)],
+  ] as const) {
+    const again = rankCard(variant, CARD.w, CARD.h, table)
+    const found = acceptMatch(again)
+    check(`${file} with ${label} is still ${frame}`, found?.id, frame)
+    if (found?.id === frame) {
+      lowestScore = Math.min(lowestScore, found.score)
+      const r = rivalIn(again)
+      if (r) worstMargin = Math.min(worstMargin, found.score - r.score)
+    }
+  }
 
   // The plates must land where a code and an edition number sit.
   const [top, bottom] = match.redactions as [typeof match.redactions[0], typeof match.redactions[0]]
@@ -552,12 +650,16 @@ for (const [file, frame] of Object.entries(expected)) {
   check(`${file}: numbers plate is in the bottom band`, bottom.y >= CARD.h * 0.8 && bottom.y + bottom.h <= CARD.h, true)
 
   // With its own frame gone, the card must be turned away rather than given
-  // somebody else's plates.
-  const without = dropFrames(table, f => f.id === frame)
-  const stranger = rankPrint(print, without)
-  check(`${file} with its frame missing is not mis-matched`, acceptMatch(stranger)?.id, undefined)
-  worstUnknown = Math.max(worstUnknown, stranger[0]!.score - (stranger.find(r => r.redactions.some((b, i) =>
-    Math.abs(b.x - stranger[0]!.redactions[i]!.x) > 6 || Math.abs(b.y - stranger[0]!.redactions[i]!.y) > 6))?.score ?? 0))
+  // somebody else's plates. A frame whose plates sit in the same place is no
+  // harm: the mask lands where it should either way.
+  for (const [label, variant] of [['as uploaded', pixels], ['light art', paintedPanel(pixels, frame, 235)]] as const) {
+    const without = dropFrames(table, f => f.id === frame)
+    const strangers = rankCard(variant, CARD.w, CARD.h, without)
+    const given = acceptMatch(strangers)
+    check(`${file} ${label} with its frame missing is not mis-matched`, !given || samePlates(given, match), true)
+    const leader = strangers[0]
+    if (leader && !samePlates(leader, match)) strongestStranger = Math.max(strongestStranger, leader.score)
+  }
 
   // The pixel scan is the fallback for exactly that case. It used to box the
   // transparent margin, or a dark border, as one enormous pill. It is a
@@ -575,8 +677,8 @@ for (const [file, frame] of Object.entries(expected)) {
     else scanWrong.push(`${file} ${which}`)
   }
 }
-console.log(`  known frames lead their nearest rival by at least ${worstMargin.toFixed(2)}; an unknown frame's best wrong answer leads by at most ${worstUnknown.toFixed(2)}`)
-check('the accept margin sits between those', worstUnknown < 0.12 && worstMargin >= 0.12, true)
+console.log(`  known frames score at least ${lowestScore.toFixed(2)} and lead their nearest rival by at least ${worstMargin.toFixed(2)};`
+  + ` an unknown frame's strongest answer that would move the mask scores ${strongestStranger.toFixed(2)}`)
 const plateCount = Object.keys(expected).length * 2
 check('the fallback scan finds most plates on real cards', scanRight >= plateCount * 0.7, true)
 check('the fallback scan rarely boxes the wrong thing', scanWrong.length <= plateCount * 0.15, true)

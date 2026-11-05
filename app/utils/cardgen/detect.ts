@@ -34,6 +34,12 @@ const IDEAL_TOP = 0.06
 const IDEAL_BOTTOM = 0.90
 /** A pill is at least this many rows tall. */
 const MIN_RUN = 6
+/**
+ * A pill keeps this far in from the card's sides, as a share of its width.
+ * The frame itself sits ten pixels in, and no frame puts a plate at its very
+ * edge; the closest in the library starts nearly five pixels inside it.
+ */
+const EDGE = 0.03
 /** Breathing room added around the found box. */
 const PAD = 4
 
@@ -97,6 +103,9 @@ function scanBand(
     const bw = box.x1 - box.x0
     const bh = box.y1 - box.y0
     if (bh < MIN_RUN || bw > w * MAX_W) continue
+    // A dark corner ornament on a dark dye runs out to the glow margin and
+    // used to be boxed as a plate. Plates never reach the edge.
+    if (box.x0 < w * EDGE || box.x1 > w * (1 - EDGE)) continue
     const aspect = bw / bh
     if (aspect < 2.2 || aspect > 15) continue
     // Shape first, then how far it sits from where plates usually are: art

@@ -4,13 +4,18 @@
 // where one card is 10 wide, measured off Ali's rendered matchups, and the
 // canvas is sized so a card comes out at its native 274 x 405.
 //
+// Cards are never drawn above native size, so the only way to make them fill
+// more of a matchup is to give them less room to sit in: the margins and gaps
+// are kept tight, which shrinks the canvas, and the background is scaled down
+// into it. A card redrawn larger would only be a blurrier card.
+//
 // Every layout is built against BACKGROUND rather than the uploaded file, so
 // the canvas comes out the same size every time and the background is
-// stretched to fill it. The canvas is capped at that nominal width: six cards
-// at native size want more room than a 1920 background has, so a duos trio
-// scales its cards down. Winners singles goes the other way, drawing its
-// three cards above native size to fill the plinths on the podium template.
-// Every other layout draws a card at exactly 274 x 405.
+// stretched to fill it. The canvas is capped at that nominal width, which no
+// layout now reaches; it is the guard that stops a future wider strip from
+// asking for a background bigger than there is. Winners singles goes the
+// other way, drawing its three cards above native size to fill the plinths on
+// the podium template. Every other layout draws a card at exactly 274 x 405.
 
 import {
   BACKGROUND, CARD, UNIT,
@@ -30,20 +35,35 @@ interface Strip {
 }
 
 /** Partners sit this far apart everywhere, in units. */
-const DUO_GAP = 1.2
+const DUO_GAP = 0.6
 
+/**
+ * Measured off Ali's matchups, as `margin : C : gap : C : margin`.
+ *
+ * The numbers are the spacing the cards want, not the spacing a 1920 canvas
+ * happens to leave over: a singles pair at 32 units puts a card across about
+ * a third of the width, which is where the reference renders sit. Three cards
+ * abreast have far less to give away, so their gaps come down to roughly the
+ * width of the versus mark and no more.
+ */
 const STRIPS: Record<'cards-2' | 'cards-3' | 'pairs-2' | 'pairs-3', Strip> = {
-  // Measured: 5 : C : 16 : C : 5
-  'cards-2': { margin: 5, teamGap: 16, duoGap: 0, teams: 2, perTeam: 1 },
-  // Measured: 2 : C : 6 : C : 6 : C : 2
-  'cards-3': { margin: 2, teamGap: 6, duoGap: 0, teams: 3, perTeam: 1 },
-  // Measured off the duos render; cards land at 274 x 405 exactly.
-  'pairs-2': { margin: 1, teamGap: 7, duoGap: DUO_GAP, teams: 2, perTeam: 2 },
-  // No render to measure. Each duo side by side, on the same partner gap.
-  'pairs-3': { margin: 1, teamGap: 5, duoGap: DUO_GAP, teams: 3, perTeam: 2 },
+  // 2 : C : 8 : C : 2
+  'cards-2': { margin: 2, teamGap: 8, duoGap: 0, teams: 2, perTeam: 1 },
+  // 1 : C : 2.5 : C : 2.5 : C : 1
+  'cards-3': { margin: 1, teamGap: 2.5, duoGap: 0, teams: 3, perTeam: 1 },
+  // Four cards abreast, so the strip carries the partner gap as well.
+  'pairs-2': { margin: 1, teamGap: 3, duoGap: DUO_GAP, teams: 2, perTeam: 2 },
+  // Six at native size now fit inside a 1920 background; they used to not.
+  'pairs-3': { margin: 1, teamGap: 2.5, duoGap: DUO_GAP, teams: 3, perTeam: 2 },
 }
 
-/** Winners sits on the same 46-unit canvas as a singles versus image. */
+/**
+ * Winners has its own canvas, unchanged by the versus strips above.
+ *
+ * Every podium position is a fraction of the canvas, measured against the
+ * plinths drawn on the template, so the cards only land on them while the
+ * canvas stays the width those fractions were taken at.
+ */
 const WINNERS_UNITS = 46
 
 /**
@@ -77,10 +97,22 @@ const PODIUM_PAIRS = [
   { scale: 0.54, cx: 0.819, cy: 0.709 },
 ] as const
 
-/** Versus mark height, as a share of the card height beside it. */
-const VS_HEIGHT = 0.20
-/** Widest the versus mark may be, as a share of the gap it sits in. */
-const VS_GAP_SHARE = 0.62
+/**
+ * Versus mark height, as a share of the card height beside it.
+ *
+ * This only sizes the mark on a singles pair, the one layout with room to
+ * spare between the cards. Everywhere else the gap runs out first and
+ * VS_GAP_SHARE is what decides, so changing this leaves those alone.
+ */
+const VS_HEIGHT = 0.10
+/**
+ * Widest the versus mark may be, as a share of the gap it sits in.
+ *
+ * Tight gaps are what sizes the mark on every layout but the singles pair,
+ * so it takes most of the gap it is given rather than floating in the middle
+ * of one. Its outline carries the weight at that size.
+ */
+const VS_GAP_SHARE = 0.8
 /** The mark sits a touch above the cards' centre line, as the render does. */
 const VS_LIFT = 0.03
 

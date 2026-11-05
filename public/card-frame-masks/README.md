@@ -6,7 +6,9 @@ One PNG per frame, clear everywhere except the two plates the card bot prints
 its code and numbers onto, which are opaque black. The generator cuts each one
 with the same threshold that found the plate, so it follows the plate's real
 outline rather than its bounding box. Plates are only about 88% rectangular,
-so a box would spill black onto the artwork around them.
+so a box would spill black onto the artwork around them. Panel showing
+between the plate and the box's padding is never cut into the mask, however
+dark the threshold, except for the few frames whose plate is a cut-out.
 
 They are served as plain static files and fetched one at a time, only once a
 card has been matched to its frame, so none of this is downloaded up front.
