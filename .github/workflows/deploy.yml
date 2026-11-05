@@ -1,12 +1,14 @@
-# Builds the site and publishes it to GitHub Pages.
+# Builds the site and publishes it to the gh-pages branch.
 #
-# Pages serves whatever this uploads, so without it the repository itself is
-# what gets served, and a repository with no index.html falls back to showing
-# the README. That is the whole reason this file exists.
+# Pages serves a branch of this repository, so it has to be given a branch
+# that is a website. Main is not one: it holds the source, and a branch with
+# no index.html at its root is run through Jekyll, which renders the README
+# instead. So the site is built here and pushed to gh-pages, which exists for
+# nothing else.
 #
-# One-off setting, in the repository: Settings -> Pages -> Source -> GitHub
-# Actions. Until that is switched over, Pages keeps serving the branch and
-# this workflow's output is ignored.
+# One-off setting, in the repository: Settings -> Pages -> Source -> Deploy
+# from a branch -> gh-pages / (root). Until that is pointed at gh-pages, Pages
+# keeps serving main and this workflow's output is ignored.
 name: Deploy to GitHub Pages
 
 on:
@@ -20,10 +22,10 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+# Only to push the built site. This workflow watches main, and nothing here
+# pushes to main, so publishing cannot set it off again.
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 jobs:
   build:
@@ -48,21 +50,24 @@ jobs:
           # at the domain root, so every asset URL has to carry that prefix.
           # Rename the repository and this line changes with it.
           NUXT_APP_BASE_URL: /karuta-dc/
-          # Writes .nojekyll. Without it Pages runs the output through Jekyll,
+          # Writes .nojekyll. Without it Pages runs the branch through Jekyll,
           # which hides every directory starting with an underscore, _nuxt
           # included, and the site loads with no CSS or JavaScript at all.
           NITRO_PRESET: github_pages
 
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: .output/public
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      # One orphan commit per deploy, force pushed: gh-pages is output, so its
+      # history is worth nothing and is not worth carrying. The repository is
+      # never checked out here, and `git add -A` from inside the built site
+      # takes the dotfiles with it, .nojekyll above all.
+      - name: Publish to gh-pages
+        working-directory: .output/public
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git init -q -b gh-pages
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -q -m "Deploy ${GITHUB_SHA::7}"
+          git push -q --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
