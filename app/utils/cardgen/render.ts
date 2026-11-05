@@ -5,7 +5,7 @@
 // Everything is in canvas space; the preview only ever scales the canvas
 // element with CSS.
 
-import { loadImage } from './images'
+import { loadImage, publicUrl } from './images'
 import { markImage, markWidth } from './marks'
 import { CARD, type CardImage, type Rect, type Scene } from './types'
 
@@ -69,7 +69,7 @@ async function drawCard(ctx: Ctx, card: CardImage, box: Rect): Promise<void> {
   // artwork around it the way a bounding box would.
   if (card.mask) {
     try {
-      const mask = await loadImage(card.mask.url)
+      const mask = await loadImage(publicUrl(card.mask.url))
       const { inset } = card.mask
       ctx.drawImage(
         mask,

@@ -25,7 +25,7 @@
 //               makes the match a few milliseconds and the mask exact.
 
 import { FRAME_DATA, FRAME_PRINT } from './frame-data'
-import { loadImage } from './images'
+import { loadImage, publicUrl } from './images'
 import { CARD, type Rect } from './types'
 
 export interface FrameMatch {
@@ -289,7 +289,7 @@ let pending: Promise<FrameTable> | undefined
 export function loadFrameTable(): Promise<FrameTable> {
   pending ??= (async () => {
     try {
-      const img = await loadImage(FRAME_PRINT.url)
+      const img = await loadImage(publicUrl(FRAME_PRINT.url))
       const canvas = document.createElement('canvas')
       canvas.width = img.naturalWidth
       canvas.height = img.naturalHeight

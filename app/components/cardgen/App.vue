@@ -3,8 +3,15 @@
 // Deliberately spare, since the page it sits on has no site navigation.
 
 import { loadFrameTable } from '~/utils/cardgen/frames'
+import { setPublicBase } from '~/utils/cardgen/images'
 
 const gen = useCardgen()
+
+// The frame library and the plate masks are fetched from public/, which is
+// not at the host root when the site is served from a subdirectory, as it is
+// on GitHub Pages. Said here, in setup, so it is known before the fetch
+// below and before any card is drawn.
+setPublicBase(useRuntimeConfig().app.baseURL)
 
 // The frame library is a 600 KB sprite fetched on the first card. Start it
 // now, while the background is being picked, so that card is not held up.

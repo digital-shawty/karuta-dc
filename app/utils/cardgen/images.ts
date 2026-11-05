@@ -74,3 +74,27 @@ export function isImageFile(file: Blob): boolean {
  * Everything a canvas can be handed; the browser decodes all of them.
  */
 export const IMAGE_FORMATS = '.jpg, .png, .gif, .webp, .avif, .bmp'
+
+/**
+ * Where the files shipped in public/ actually live.
+ *
+ * GitHub Pages serves this project from /karuta-dc/ rather than a domain
+ * root, and a site embedding the tool moves it again, so the leading slash
+ * these paths are written with is not enough on its own. The app says where
+ * it is once, at startup; the checks never do, and read the same paths off
+ * disk unchanged.
+ */
+let publicBase = ''
+
+export function setPublicBase(base: string): void {
+  publicBase = base.replace(/\/+$/, '')
+}
+
+/**
+ * A path under public/, pointed at wherever that turned out to be.
+ * Only for files shipped in public/: an object URL is already absolute and
+ * must never come through here.
+ */
+export function publicUrl(path: string): string {
+  return publicBase + path
+}
