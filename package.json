@@ -1,0 +1,28 @@
+{
+  "name": "karuta-dc",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "check:cardgen": "node scripts/cardgen-check.mjs",
+    "build:frames": "python3 scripts/frames/build-frames.py",
+    "build:vs": "python3 scripts/frames/build-vs-mark.py"
+  },
+  "dependencies": {
+    "@nuxt/fonts": "^0.14.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "fflate": "^0.8.3",
+    "nuxt": "^4.5.2",
+    "tailwindcss": "^4.3.3",
+    "tesseract.js": "^7.0.0",
+    "vue": "^3.5.42",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

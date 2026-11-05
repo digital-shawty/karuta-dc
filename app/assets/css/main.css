@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+/*
+  Design tokens. Change a value here and it updates everywhere.
+  Tailwind turns each --color-* into classes: bg-canvas, text-ink, etc.
+
+  One theme, dark throughout. Every tool on the site reads these names, so a
+  tool never picks its own colours and nothing has to be restyled twice.
+*/
+@theme {
+  --font-sans: "Turret Road", ui-sans-serif, system-ui, sans-serif;
+  --font-tab: "Bitcount Prop Single", ui-monospace, monospace;
+
+  --color-canvas: #111111;  /* page background */
+  --color-surface: #1a1a1f; /* cards, panels, disabled fills */
+  --color-ink: #ffffff;     /* text */
+  --color-accent: #00ffff;  /* highlights, borders, primary buttons */
+
+  --color-line: #3f3f4a;        /* field and frame borders, secondary buttons */
+  --color-muted: #8b8b99;       /* labels, helper text, disabled text */
+  --color-danger: #e5484d;      /* delete text and border */
+  --color-danger-soft: #3a1d1f; /* delete fill */
+}
+
+/*
+  Chunky offset shadow. It reads --color-accent, so it follows the theme.
+*/
+@utility shadow-hard {
+  box-shadow: 0.3rem 0.3rem 0 0 var(--color-accent);
+}
+
+/*
+  The page colour belongs to the document, not only to the layout box inside
+  it, so overscrolling past the end of a dark page does not flash white.
+*/
+@layer base {
+  html {
+    background-color: var(--color-canvas);
+    color-scheme: dark;
+  }
+
+  :root {
+    /*
+      How tall a tool's preview may grow. Nothing caps the generator's width
+      any more, so on a wide monitor a 16:9 canvas would otherwise come out
+      taller than the screen it has to be judged on. A preview gives up width
+      to stay inside this, which keeps the whole picture in view.
+    */
+    --preview-max-h: 70vh;
+  }
+}

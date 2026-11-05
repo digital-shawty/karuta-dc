@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 157 112" width="157" height="112">
+  <!--
+    Rank mark "1ST". Flat shapes with an outline, white inside black,
+    matching vs-default.svg. `fill` is the face and `stroke` is the outline; the
+    mark resolver swaps both and sets the root width and height before drawing.
+
+    Every character is a closed polygon with no curves, so the set reads as one
+    blocky family. D and R carry their counters as a second subpath, which is
+    why the group sets fill-rule="evenodd": the counter punches a hole and the
+    outline traces it too.
+
+    Drawn rather than typeset. An SVG rendered into a canvas cannot fetch a
+    font, so a <text> element would fall back to whatever the machine has.
+  -->
+  <g transform="translate(6,6)" fill="#ffffff" stroke="#000000"
+     stroke-width="5" stroke-linejoin="miter" stroke-miterlimit="6" fill-rule="evenodd">
+    <path d="M 0,22 L 26,0 L 52,0 L 52,100 L 26,100 L 26,34 Z"/>
+    <g transform="translate(62,0)"><path d="M 0,0 L 38,0 L 38,12 L 12,12 L 12,21 L 38,21 L 38,55 L 0,55 L 0,43 L 26,43 L 26,33 L 0,33 Z"/></g>
+    <g transform="translate(107,0)"><path d="M 0,0 L 38,0 L 38,12 L 25,12 L 25,55 L 13,55 L 13,12 L 0,12 Z"/></g>
+  </g>
+</svg>
